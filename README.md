@@ -102,12 +102,12 @@ are missing:
 | **git** | clones `nhost_apps` |
 | **bash** (3.2+) / **sed** | run and render the installer |
 
-### Software (optional)
+### Software (TLS-mode dependent)
 
-| Tool | Enables |
-|------|---------|
-| **mkcert** | locally-*trusted* certs in `selfsigned` mode (no browser warning). If absent, `openssl` self-signed certs are used instead. |
-| **certbot** | automatic **Let's Encrypt** certs in `letsencrypt` mode. If absent, the script prints the exact command to run. |
+| Tool | When | Purpose |
+|------|------|---------|
+| **mkcert** | **required** for `selfsigned` | installs a local CA so browsers trust the certs. `setup.sh` **aborts** in `selfsigned` mode if it is missing — a plain openssl self-signed cert is untrusted and breaks cross-origin auth/GraphQL/WebSocket, so there is no fallback. |
+| **certbot** | recommended for `letsencrypt` | auto-issues **Let's Encrypt** certs. If absent, the script prints the exact command to run. |
 
 ### Access & network
 
@@ -163,9 +163,9 @@ TLS mode. All service hostnames are derived from the base domain:
 
 ### TLS modes
 
-- **selfsigned** — generates a self-signed wildcard cert (browsers warn; fine
-  for local evaluation). The script prints the `/etc/hosts` lines you need and
-  can append them for you.
+- **selfsigned** — generates a locally-trusted wildcard cert via **mkcert**
+  (required; no browser warnings). The script prints the `/etc/hosts` lines you
+  need and can append them for you.
 - **letsencrypt** — runs `certbot` if installed (needs public DNS + port 80),
   otherwise prints the exact command.
 - **provided** — bring your own `certs/fullchain.pem` + `certs/privkey.pem`.

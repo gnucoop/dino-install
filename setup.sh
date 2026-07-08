@@ -213,44 +213,21 @@ fi
 
 # ---------- 6. TLS certificates ----------
 mkdir -p certs
-gen_self_signed() {
-  local san="" d; for d in "${SUBDOMAINS[@]}"; do san="${san}DNS:${d}.${BASE_DOMAIN},"; done
-  san="${san}DNS:*.${BASE_DOMAIN}"
-  local cfg; cfg="$(mktemp)"
-  cat > "$cfg" <<EOF
-[req]
-distinguished_name = dn
-x509_extensions = v3
-prompt = no
-[dn]
-CN = *.${BASE_DOMAIN}
-[v3]
-subjectAltName = ${san}
-basicConstraints = CA:FALSE
-keyUsage = digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth
-EOF
-  openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
-    -keyout certs/privkey.pem -out certs/fullchain.pem -config "$cfg"
-  rm -f "$cfg"; chmod 600 certs/privkey.pem
-}
-
 case "$TLS_MODE" in
   selfsigned)
-    if command -v mkcert >/dev/null 2>&1; then
-      info "Generating a locally-trusted certificate with mkcert for *.${BASE_DOMAIN} ..."
-      mkcert -install || warn "mkcert -install failed; the CA may not be trusted yet (run 'mkcert -install' manually)."
-      mkcert -cert-file certs/fullchain.pem -key-file certs/privkey.pem \
-        "*.${BASE_DOMAIN}" "${BASE_DOMAIN}"
-      chmod 600 certs/privkey.pem
-      info "mkcert CA installed — browsers trust these certs automatically (restart the browser)."
-    else
-      info "Generating self-signed certificate for *.${BASE_DOMAIN} (openssl) ..."
-      gen_self_signed
-      warn "Self-signed cert (openssl): browsers will warn on it. For zero-warning local"
-      warn "certs install mkcert ('brew install mkcert') and re-run, or trust"
-      warn "certs/fullchain.pem in your OS keychain."
-    fi
+    # mkcert is REQUIRED for selfsigned: it installs a local CA so browsers
+    # trust the certs. A plain openssl self-signed cert is untrusted and breaks
+    # cross-origin XHR/WebSocket (auth/hasura), so we do not fall back to it.
+    command -v mkcert >/dev/null 2>&1 || die "TLS mode 'selfsigned' requires mkcert.
+    Install it (macOS: 'brew install mkcert'  •  Linux: apt/dnf install mkcert or
+    https://github.com/FiloSottile/mkcert) and re-run, or choose another TLS mode
+    (SETUP_TLS_MODE=letsencrypt|provided)."
+    info "Generating a locally-trusted certificate with mkcert for *.${BASE_DOMAIN} ..."
+    mkcert -install || warn "mkcert -install failed; the CA may not be trusted yet (run 'mkcert -install' manually)."
+    mkcert -cert-file certs/fullchain.pem -key-file certs/privkey.pem \
+      "*.${BASE_DOMAIN}" "${BASE_DOMAIN}"
+    chmod 600 certs/privkey.pem
+    info "mkcert CA installed — browsers trust these certs automatically (restart the browser)."
     ;;
   letsencrypt)
     if command -v certbot >/dev/null 2>&1; then
