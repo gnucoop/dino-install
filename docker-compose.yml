@@ -1,0 +1,232 @@
+services:
+  postgres:
+    image: pgvector/pgvector:${POSTGRES_VERSION}
+    environment:
+      PGDATA: /var/lib/postgresql/data/
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_USER: ${PG_USER}
+    ports:
+      - "${PG_PORT}:${PG_PORT}"
+    restart: always
+    volumes:
+      - ./data:/var/lib/postgresql/data/
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # TLS termination + reverse proxy for all subdomains.
+  nginx:
+    image: nginx:latest
+    restart: always
+    volumes:
+      - ./certs/:/etc/nginx/certs
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "443:443"
+      - "80:80"
+
+  # Dino SPA, served by the prebuilt image (nginx on port 80 with Angular routing).
+  dinoapp:
+    image: devgnucoop/dinoapp:${DINOAPP_VERSION}
+    restart: always
+    environment:
+      - AUTH_URL=${DINOAPP_AUTH_URL}
+      - SYNC_GRAPHQL_URL=${DINOAPP_GRAPHQL_URL}
+      - WS_URL=${DINOAPP_WS_URL}
+      - INSTANCE_NAME=${INSTANCE_NAME}
+    ports:
+      - "8090:80"
+
+  graphql:
+    image: nhost/graphql-engine:${HASURA_VERSION}
+    # Start only once Postgres is accepting connections.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+    ports:
+      - "${YOUR_HASURA_PORT}:${HASURA_GRAPHQL_SERVER_PORT}"
+    environment:
+      - HASURA_GRAPHQL_DATABASE_URL=postgres://${PG_USER}:${PG_PASSWORD}@${PG_ADDRESS}:${PG_PORT}/${DINO_DB_NAME}
+      - HASURA_GRAPHQL_JWT_SECRET=${HASURA_GRAPHQL_JWT_SECRET}
+      - HASURA_GRAPHQL_ADMIN_SECRET=${ADMIN_PASSWORD}
+      - HASURA_GRAPHQL_UNAUTHORIZED_ROLE=${HASURA_GRAPHQL_UNAUTHORIZED_ROLE}
+      - HASURA_GRAPHQL_ENABLE_CONSOLE=${HASURA_GRAPHQL_ENABLE_CONSOLE}
+      - HASURA_GRAPHQL_CORS_DOMAIN=https://${CLIENT_URL}
+    volumes:
+      - ${HASURA_METADATA}:/hasura-metadata
+      - ${HASURA_MIGRATIONS}:/hasura-migrations
+    # Marks the service "healthy" only when Hasura answers on /healthz, so that
+    # auth and storage wait for a fully-running Hasura (not just a started one).
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${HASURA_GRAPHQL_SERVER_PORT}/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  auth:
+    image: nhost/auth:${HASURA_AUTH_VERSION}
+    # Start only when Postgres is up AND Hasura is up and running (healthy).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      graphql:
+        condition: service_healthy
+    environment:
+      - HASURA_GRAPHQL_DATABASE_URL=postgres://${PG_USER}:${PG_PASSWORD}@${PG_ADDRESS}:${PG_PORT}/${DINO_DB_NAME}
+      - POSTGRES_MIGRATIONS_CONNECTION=postgres://${PG_USER}:${PG_PASSWORD}@${PG_ADDRESS}:${PG_PORT}/${DINO_DB_NAME}
+      - AUTH_ENCRYPTION_KEY=${AUTH_ENCRYPTION_KEY}
+      - HASURA_GRAPHQL_GRAPHQL_URL=http://${HASURA_URL}:8080/v1/graphql
+      - HASURA_GRAPHQL_JWT_SECRET=${HASURA_GRAPHQL_JWT_SECRET}
+      - HASURA_GRAPHQL_ADMIN_SECRET=${ADMIN_PASSWORD}
+      - AUTH_SERVER_URL=http://${AUTH_URL}:4000/v1
+      - AUTH_CLIENT_URL=https://${CLIENT_URL}
+      - AUTH_SMTP_HOST=${AUTH_SMTP_HOST}
+      - AUTH_SMTP_AUTH_METHOD=${AUTH_SMTP_AUTH_METHOD}
+      - AUTH_SMTP_PORT=${AUTH_SMTP_PORT}
+      - AUTH_SMTP_USER=${AUTH_SMTP_USER}
+      - AUTH_SMTP_PASS=${AUTH_SMTP_PASS}
+      - AUTH_SMTP_SENDER=${AUTH_SMTP_SENDER}
+      - AUTH_SMTP_SECURE=${AUTH_SMTP_SECURE}
+      - AUTH_LOG_LEVEL=${AUTH_LOG_LEVEL}
+      - AUTH_LOCALE_ALLOWED_LOCALES=${AUTH_LOCALE_ALLOWED_LOCALES}
+      - AUTH_LOCALE_DEFAULT=${AUTH_LOCALE_DEFAULT}
+      - AUTH_EMAIL_SIGNIN_EMAIL_VERIFIED_REQUIRED=${AUTH_EMAIL_SIGNIN_EMAIL_VERIFIED_REQUIRED}
+      # NOTE: do NOT set the ALLOWED/BLOCKED email vars to "" in this list form —
+      # docker-compose passes the literal two-char value «""», which auth reads as a
+      # one-entry allowlist and then rejects every login. Omit them = unrestricted.
+      - AUTH_ACCESS_CONTROL_ALLOWED_REDIRECT_URLS=${AUTH_ACCESS_CONTROL_ALLOWED_REDIRECT_URLS}
+      - AUTH_ACCESS_TOKEN_EXPIRES_IN=900
+      - AUTH_ANONYMOUS_USERS_ENABLED=false
+      - AUTH_API_PREFIX=/v1
+      - AUTH_CONCEAL_ERRORS=false
+      - AUTH_DISABLE_NEW_USERS=false
+      - AUTH_DISABLE_SIGNUP=false
+      - AUTH_EMAIL_PASSWORDLESS_ENABLED=false
+      - AUTH_GRAVATAR_DEFAULT=blank
+      - AUTH_GRAVATAR_ENABLED=true
+      - AUTH_GRAVATAR_RATING=g
+      - AUTH_HOST=0.0.0.0
+      - AUTH_MFA_ENABLED=false
+      - AUTH_MFA_TOTP_ISSUER=""
+      - AUTH_OTP_EMAIL_ENABLED=false
+      - AUTH_PASSWORD_HIBP_ENABLED=false
+      - AUTH_PASSWORD_MIN_LENGTH=9
+      - AUTH_RATE_LIMIT_BRUTE_FORCE_BURST=10
+      - AUTH_RATE_LIMIT_BRUTE_FORCE_INTERVAL=5m
+      - AUTH_RATE_LIMIT_EMAIL_BURST=10
+      - AUTH_RATE_LIMIT_EMAIL_INTERVAL=1h
+      - AUTH_RATE_LIMIT_EMAIL_IS_GLOBAL=true
+      - AUTH_RATE_LIMIT_ENABLE=true
+      - AUTH_RATE_LIMIT_GLOBAL_BURST=100
+      - AUTH_RATE_LIMIT_GLOBAL_INTERVAL=1m
+      - AUTH_RATE_LIMIT_SIGNUPS_BURST=10
+      - AUTH_RATE_LIMIT_SIGNUPS_INTERVAL=5m
+      - AUTH_RATE_LIMIT_SMS_BURST=10
+      - AUTH_RATE_LIMIT_SMS_INTERVAL=1h
+      - AUTH_REFRESH_TOKEN_EXPIRES_IN=2592000
+      - AUTH_REQUIRE_ELEVATED_CLAIM=disabled
+    ports:
+      - "${YOUR_AUTH_PORT}:${AUTH_PORT}"
+    volumes:
+      - ${AUTH_EMAIL_TEMPLATE}:/app/email-templates
+    restart: always
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    command: server --address 0.0.0.0:9000 --console-address 0.0.0.0:32765 /data
+    ports:
+      - "9006:9000"
+      - "32765:32765"
+    volumes:
+      - ./minio/storage:/data
+
+  # Ephemeral helper: waits for MinIO, then creates the default bucket.
+  createbucket:
+    image: minio/mc
+    depends_on:
+      - minio
+    environment:
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET=${S3_BUCKET}
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set local http://minio:9000 $${S3_ACCESS_KEY} $${S3_SECRET_KEY}) do echo 'waiting for minio...'; sleep 2; done;
+      /usr/bin/mc mb -p local/$${S3_BUCKET} || true;
+      echo 'bucket ready:' $${S3_BUCKET};
+      exit 0;
+      "
+
+  storage:
+    image: nhost/storage:${HASURA_STORAGE_VERSION}
+    # Start only when Postgres is up AND Hasura is up and running (healthy).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      graphql:
+        condition: service_healthy
+    restart: always
+    ports:
+      - "${YOUR_STORAGE_PORT}:${STORAGE_PORT}"
+    environment:
+      - HASURA_METADATA=1
+      - HASURA_ENDPOINT=http://${HASURA_URL}:8080/v1
+      - HASURA_GRAPHQL_ADMIN_SECRET=${ADMIN_PASSWORD}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_REGION=${S3_REGION}
+      - POSTGRES_MIGRATIONS=1
+      - POSTGRES_MIGRATIONS_SOURCE=postgres://${PG_USER}:${PG_PASSWORD}@${PG_ADDRESS}:${PG_PORT}/${DB_NAME}?sslmode=disable
+      - PUBLIC_URL=https://${PUBLIC_STORAGE_URL}
+    command:
+      - serve
+
+  # Ephemeral one-shot: seeds initial data (roles, admin group, admin login user,
+  # anonymous user) once the schema exists. Idempotent — safe to re-run.
+  postinstall:
+    image: pgvector/pgvector:${POSTGRES_VERSION}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      graphql:
+        condition: service_healthy   # public.* migrations applied
+      auth:
+        condition: service_started    # distroless image has no healthcheck; polled below
+    restart: "no"
+    environment:
+      - PGHOST=${PG_ADDRESS}
+      - PGPORT=${PG_PORT}
+      - PGUSER=${PG_USER}
+      - PGPASSWORD=${PG_PASSWORD}
+      - PGDATABASE=${DINO_DB_NAME}
+      - CLIENT_EMAIL=${ADMIN_EMAIL}
+      - CLIENT_PASSWORD=${ADMIN_PASSWORD}
+      - USER_DISPLAY_NAME=${USER_DISPLAY_NAME}
+    volumes:
+      - ./postinstall.sql:/postinstall.sql:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "waiting for schema (auth.users + public.user_role)...";
+        until [ "$$(psql -tAc "select (to_regclass('auth.users') is not null and to_regclass('public.user_role') is not null)")" = "t" ]; do sleep 2; done;
+        psql -v ON_ERROR_STOP=1 \
+          -v client_email="$$CLIENT_EMAIL" \
+          -v client_password="$$CLIENT_PASSWORD" \
+          -v client_display_name="$$USER_DISPLAY_NAME" \
+          -f /postinstall.sql;
+        echo "post-install seed complete.";

@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Generated / fetched by setup.sh — never commit these
+.env
+.env.backup
+nginx.conf
+certs/
+nhost_apps/
+data/
+minio/
+
+# NOTE: init.sql and postinstall.sql ARE committed — they ship with the installer
+# (DB seed + first-boot data). docker-compose.yml is a committed source too.
