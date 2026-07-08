@@ -5,6 +5,29 @@ A slim, one-command setup for the Dino backend stack. Instead of hand-editing
 `setup.sh` once: it asks for a single **base domain**, auto-generates every
 secret, and renders a consistent configuration ready for `docker compose up -d`.
 
+## Quick start
+
+```bash
+# 1. Clone
+git clone git@github.com:gnucoop/dino-install.git
+cd dino-install
+
+# 2. Generate a deployment into a folder of your choice, and answer the prompts
+./setup.sh my-dino
+
+# 3. Start the stack
+cd my-dino
+docker compose up -d          # or: docker-compose up -d
+
+# 4. Open the app in your browser at the Dino URL
+#    https://dino.<BASE_DOMAIN>
+#    (the exact URL + admin email/password are printed at the end of setup.sh)
+```
+
+> See [Requirements](#requirements) first. For `selfsigned` TLS you need
+> **mkcert**, and the subdomains must resolve (`setup.sh` offers to add the
+> `/etc/hosts` entries for you).
+
 ## Stack
 
 Services: **nginx** (TLS termination + reverse proxy), **dinoapp** (the Dino SPA,
