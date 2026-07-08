@@ -1,4 +1,4 @@
-# Dino installer
+# The 30-Second Dino Installer
 
 A slim, one-command setup for the Dino backend stack. Instead of hand-editing
 `.env`, `nginx.conf` and TLS certs (and keeping their domains in sync), you run
