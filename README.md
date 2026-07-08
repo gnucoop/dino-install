@@ -32,17 +32,52 @@ with the admin email + password shown at the end of `setup.sh`.
 > Pandino (AI backend), the chatbot proxy and the welcome site are intentionally
 > excluded from this slim kit.
 
-## Prerequisites
+## Requirements
 
-- Docker + Docker Compose (`setup.sh` checks these, plus `openssl`, `git`,
-  `bash`, `sed`, and that the Docker daemon is running — before doing anything).
-- **git access to the `nhost_apps` repo** (Hasura metadata/migrations/emails).
-  `setup.sh` always clones it into a real `nhost_apps/` folder — the installer
-  never depends on any file outside itself. Override the source with
-  `SETUP_NHOST_APPS_REPO=<url>` if needed.
-- Everything else is self-contained: the SPA ships as the `devgnucoop/dinoapp`
-  image, and `init.sql` (DB seed) + `postinstall.sql` (first-boot data) ship
-  committed inside this folder.
+### Software (required)
+
+`setup.sh` checks all of these up front and aborts with a clear message if any
+are missing:
+
+| Tool | Purpose |
+|------|---------|
+| **Docker** (daemon running) | runs the stack |
+| **Docker Compose** | `docker compose` plugin *or* legacy `docker-compose` |
+| **openssl** | generates secrets and self-signed certificates |
+| **git** | clones `nhost_apps` |
+| **bash** (3.2+) / **sed** | run and render the installer |
+
+### Software (optional)
+
+| Tool | Enables |
+|------|---------|
+| **mkcert** | locally-*trusted* certs in `selfsigned` mode (no browser warning). If absent, `openssl` self-signed certs are used instead. |
+| **certbot** | automatic **Let's Encrypt** certs in `letsencrypt` mode. If absent, the script prints the exact command to run. |
+
+### Access & network
+
+- **git access to the `nhost_apps` repo** (Hasura metadata / migrations / emails).
+  `setup.sh` clones it into a real `nhost_apps/` folder — the installer never
+  depends on any file outside itself. Default is SSH
+  (`git@github.com:gnucoop/nhost_apps.git`, branch `prod-1.21.0-permissions-m2`);
+  override with `SETUP_NHOST_APPS_REPO` / `SETUP_NHOST_APPS_BRANCH`.
+- **Free host ports:** `80`, `443` (nginx), `5432` (postgres), `8090` (SPA),
+  `9000`/`9001`/`9002` (hasura/auth/storage), `9006`/`32765` (MinIO API/console).
+- **Name resolution** for the six subdomains (see the table below):
+  - local install → `setup.sh` prints the `/etc/hosts` lines and can append them;
+  - public install → real DNS A/AAAA records pointing at the host.
+
+### Backend image
+
+- The SPA ships as the **`devgnucoop/dinoapp`** image (no Node/Angular build
+  needed here). If you build your own image, its `environment.ts` **must** define
+  `dataConfig.socketJwtExpiredCode` (e.g. `4403`) — otherwise the app hangs on
+  "Initializing data…". Set `DINOAPP_VERSION` in `.env` to pick the tag.
+
+### Bundled (nothing to fetch)
+
+`init.sql` (DB seed) and `postinstall.sql` (first-boot data) ship committed in
+this folder and are copied into each deployment automatically.
 
 ## Usage
 
