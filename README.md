@@ -14,6 +14,61 @@ served from the `devgnucoop/dinoapp` image), **PostgreSQL** (pgvector),
 (creates the default MinIO bucket) and `postinstall` (seeds initial data once the
 schema exists — see below).
 
+```mermaid
+flowchart TB
+    U(["👤 Browser"])
+
+    subgraph PROXY["Edge"]
+        N["🔒 nginx<br>TLS + reverse proxy<br>:80 / :443"]
+    end
+
+    subgraph APP["Application"]
+        D["dinoapp · SPA<br>devgnucoop/dinoapp<br>:8090"]
+        G["Hasura GraphQL<br>nhost/graphql-engine<br>:9000"]
+        A["Auth<br>nhost/auth<br>:9001 · /v1"]
+        S["Storage<br>nhost/storage<br>:9002"]
+        M["MinIO · S3<br>:9006 API / :32765 console"]
+    end
+
+    subgraph DATA["Data"]
+        P[("PostgreSQL<br>+ pgvector")]
+    end
+
+    subgraph BOOT["First-boot one-shots"]
+        CB["createbucket<br>minio/mc"]
+        PI["postinstall<br>psql · postinstall.sql"]
+    end
+
+    NA[["nhost_apps<br>metadata · migrations · emails"]]
+    IS[["init.sql · DB seed"]]
+
+    U -->|"HTTPS · *.BASE_DOMAIN"| N
+    N -->|"dino."| D
+    N -->|"hasura."| G
+    N -->|"auth."| A
+    N -->|"storage."| S
+    N -->|"minio. / minio-console."| M
+
+    G --> P
+    A --> P
+    A -.-> G
+    S --> P
+    S -.-> G
+    S -->|"S3"| M
+
+    NA -. "mount" .-> G
+    IS -. "mount" .-> P
+    CB -->|"creates default bucket"| M
+    PI -->|"seeds roles + admin user"| P
+```
+
+**Request flow:** the browser hits `https://<service>.<BASE_DOMAIN>`; nginx
+terminates TLS and reverse-proxies each subdomain to the right service. Hasura,
+Auth and Storage all talk to Postgres; Storage keeps objects in MinIO; Hasura
+applies the `nhost_apps` migrations/metadata; Postgres is seeded from `init.sql`.
+On first boot `createbucket` creates the default bucket and `postinstall` seeds
+the roles + admin login, then both exit.
+
 ### First-boot seed (`postinstall.sql`)
 
 After Hasura and Auth have applied their migrations, the `postinstall` service
