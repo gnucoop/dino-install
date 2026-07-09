@@ -178,26 +178,26 @@ http {
     }
 
     upstream dinoapp {
-        server __UPSTREAM_HOST__:8090;
+        server __UPSTREAM_HOST__:__DINOAPP_HOST_PORT__;
     }
 
     upstream hasura {
-        server __UPSTREAM_HOST__:9000;
+        server __UPSTREAM_HOST__:__YOUR_HASURA_PORT__;
     }
 
     upstream auth {
-        server __UPSTREAM_HOST__:9001;
+        server __UPSTREAM_HOST__:__YOUR_AUTH_PORT__;
     }
 
     upstream storage {
-        server __UPSTREAM_HOST__:9002;
+        server __UPSTREAM_HOST__:__YOUR_STORAGE_PORT__;
     }
 
     upstream minio {
-        server __UPSTREAM_HOST__:9006;
+        server __UPSTREAM_HOST__:__MINIO_API_PORT__;
     }
 
     upstream minioconsole {
-        server __UPSTREAM_HOST__:32765;
+        server __UPSTREAM_HOST__:__MINIO_CONSOLE_PORT__;
     }
 }

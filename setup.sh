@@ -74,9 +74,20 @@ cd "$TARGET_DIR"
 NHOST_APPS_REPO="${SETUP_NHOST_APPS_REPO:-git@github.com:gnucoop/nhost_apps.git}"
 NHOST_APPS_BRANCH="${SETUP_NHOST_APPS_BRANCH:-prod-1.21.0-permissions-m2}"
 SUBDOMAINS=(dino auth hasura storage minio minio-console)
-# Host ports published by docker-compose.yml (nginx 80/443, postgres 5432,
-# SPA 8090, hasura 9000, auth 9001, storage 9002, minio 9006 + console 32765).
-DINO_PORTS=(80 443 5432 8090 9000 9001 9002 9006 32765)
+
+# Host ports are read from .env.template so docker-compose.yml, nginx.conf and the
+# port check below all share one source of truth (nothing is hardcoded twice).
+_envval() { grep -E "^$1=" "$SCRIPT_DIR/.env.template" | head -1 | cut -d= -f2- | tr -d '"'; }
+P_HTTP="$(_envval HTTP_PORT)"
+P_HTTPS="$(_envval HTTPS_PORT)"
+P_PG="$(_envval PG_PORT)"
+P_DINOAPP="$(_envval DINOAPP_HOST_PORT)"
+P_HASURA="$(_envval YOUR_HASURA_PORT)"
+P_AUTH="$(_envval YOUR_AUTH_PORT)"
+P_STORAGE="$(_envval YOUR_STORAGE_PORT)"
+P_MINIO="$(_envval MINIO_API_PORT)"
+P_CONSOLE="$(_envval MINIO_CONSOLE_PORT)"
+DINO_PORTS=("$P_HTTP" "$P_HTTPS" "$P_PG" "$P_DINOAPP" "$P_HASURA" "$P_AUTH" "$P_STORAGE" "$P_MINIO" "$P_CONSOLE")
 
 # ---------- pretty output ----------
 c_bold=$'\033[1m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_red=$'\033[31m'; c_rst=$'\033[0m'
@@ -251,6 +262,13 @@ render() {  # render <template> <output>  (literal token substitution, safe for 
   content="${content//__AUTH_SMTP_PASS__/$AUTH_SMTP_PASS}"
   content="${content//__AUTH_SMTP_SENDER__/$AUTH_SMTP_SENDER}"
   content="${content//__UPSTREAM_HOST__/$UPSTREAM_HOST}"
+  # nginx upstream ports (kept in sync with docker-compose host ports / .env)
+  content="${content//__DINOAPP_HOST_PORT__/$P_DINOAPP}"
+  content="${content//__YOUR_HASURA_PORT__/$P_HASURA}"
+  content="${content//__YOUR_AUTH_PORT__/$P_AUTH}"
+  content="${content//__YOUR_STORAGE_PORT__/$P_STORAGE}"
+  content="${content//__MINIO_API_PORT__/$P_MINIO}"
+  content="${content//__MINIO_CONSOLE_PORT__/$P_CONSOLE}"
   printf '%s\n' "$content" > "$2"
 }
 
