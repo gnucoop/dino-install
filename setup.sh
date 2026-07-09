@@ -40,6 +40,11 @@ Environment overrides (for unattended / cloud installs):
   SETUP_UPSTREAM_HOST      Docker host gateway nginx uses to reach services.
   SETUP_AUTH_SMTP_*        Optional SMTP settings (HOST/PORT/USER/PASS/SENDER).
 
+Safety guards:
+  SETUP_SKIP_PORT_CHECK=1  Skip the check that all Dino host ports are free.
+  SETUP_FORCE=1            Proceed even if the target already looks like a
+                           deployment (existing docker-compose.yml / .env).
+
 Example:
   SETUP_NONINTERACTIVE=1 SETUP_BASE_DOMAIN=dino.example.com \
     SETUP_TLS_MODE=letsencrypt ./setup.sh ../my-dino
@@ -69,6 +74,9 @@ cd "$TARGET_DIR"
 NHOST_APPS_REPO="${SETUP_NHOST_APPS_REPO:-git@github.com:gnucoop/nhost_apps.git}"
 NHOST_APPS_BRANCH="${SETUP_NHOST_APPS_BRANCH:-prod-1.21.0-permissions-m2}"
 SUBDOMAINS=(dino auth hasura storage minio minio-console)
+# Host ports published by docker-compose.yml (nginx 80/443, postgres 5432,
+# SPA 8090, hasura 9000, auth 9001, storage 9002, minio 9006 + console 32765).
+DINO_PORTS=(80 443 5432 8090 9000 9001 9002 9006 32765)
 
 # ---------- pretty output ----------
 c_bold=$'\033[1m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_red=$'\033[31m'; c_rst=$'\033[0m'
@@ -78,6 +86,18 @@ err()   { printf '%sxx %s %s\n' "$c_red"  "$c_rst" "$*" >&2; }
 die()   { err "$*"; exit 1; }
 
 NONINTERACTIVE="${SETUP_NONINTERACTIVE:-0}"
+
+# port_in_use <port>  → returns 0 if something is LISTENing on it (macOS + Linux).
+port_in_use() {
+  local p="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1
+  elif command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$p" >/dev/null 2>&1
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$p") >/dev/null 2>&1
+  fi
+}
 
 # prompt VAR "Question" "default" [silent]
 prompt() {
@@ -140,6 +160,42 @@ if [ "$MISSING" -gt 0 ]; then
   die "$MISSING requirement(s) missing — install them and re-run ./setup.sh"
 fi
 info "All software requirements satisfied."
+
+# ---------- 1b. don't clobber an existing deployment ----------
+# Only a separate TARGET folder is guarded by docker-compose.yml (the installer's
+# own folder always has it as source); in-place runs use a generated .env instead.
+if [ "${SETUP_FORCE:-0}" = "1" ]; then
+  warn "SETUP_FORCE=1 — skipping existing-deployment guard."
+elif [ "$TARGET_DIR" != "$SCRIPT_DIR" ] && [ -f docker-compose.yml ]; then
+  die "Target '$TARGET_DIR' already contains docker-compose.yml (existing deployment).
+    Refusing to overwrite it and regenerate secrets. Choose a fresh folder, remove
+    the existing one, or override with SETUP_FORCE=1."
+elif [ "$TARGET_DIR" = "$SCRIPT_DIR" ] && [ -f .env ]; then
+  die "This folder already has a generated .env (existing in-place deployment).
+    Refusing to regenerate secrets. Deploy into a new folder (./setup.sh my-dino),
+    or override with SETUP_FORCE=1."
+fi
+
+# ---------- 1c. required host ports must be free ----------
+if [ "${SETUP_SKIP_PORT_CHECK:-0}" = "1" ]; then
+  warn "SETUP_SKIP_PORT_CHECK=1 — skipping host port check."
+else
+  info "Checking required host ports are free (${DINO_PORTS[*]})..."
+  BUSY=()
+  for p in "${DINO_PORTS[@]}"; do port_in_use "$p" && BUSY+=("$p"); done
+  if [ "${#BUSY[@]}" -gt 0 ]; then
+    err "The following host ports are already in use: ${BUSY[*]}"
+    if command -v lsof >/dev/null 2>&1; then
+      for p in "${BUSY[@]}"; do
+        proc="$(lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" (pid "$2")"}')"
+        printf '     :%-6s %s\n' "$p" "${proc:-in use}"
+      done
+    fi
+    die "Free these ports (or stop the conflicting services) and re-run.
+    Override with SETUP_SKIP_PORT_CHECK=1."
+  fi
+  info "All required host ports are free."
+fi
 
 OS="$(uname -s)"
 case "$OS" in

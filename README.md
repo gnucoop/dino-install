@@ -141,6 +141,8 @@ are missing:
   override with `SETUP_NHOST_APPS_REPO` / `SETUP_NHOST_APPS_BRANCH`.
 - **Free host ports:** `80`, `443` (nginx), `5432` (postgres), `8090` (SPA),
   `9000`/`9001`/`9002` (hasura/auth/storage), `9006`/`32765` (MinIO API/console).
+  `setup.sh` verifies all of these are free and **aborts** (listing the offenders)
+  if any are in use — bypass with `SETUP_SKIP_PORT_CHECK=1`.
 - **Name resolution** for the six subdomains (see the table below):
   - local install → `setup.sh` prints the `/etc/hosts` lines and can append them;
   - public install → real DNS A/AAAA records pointing at the host.
@@ -205,6 +207,17 @@ SETUP_ADMIN_EMAIL=admin@example.com \
 SETUP_TLS_MODE=letsencrypt \
 ./setup.sh
 ```
+
+## Safety guards
+
+Before writing anything, `setup.sh`:
+
+- **Refuses to overwrite an existing deployment** — if the target folder already
+  contains a `docker-compose.yml` (or, for an in-place run, a generated `.env`),
+  it aborts rather than regenerate secrets and break a running stack. Override
+  with `SETUP_FORCE=1`.
+- **Checks all required host ports are free** and aborts listing any in use.
+  Override with `SETUP_SKIP_PORT_CHECK=1`.
 
 ## What gets generated
 
