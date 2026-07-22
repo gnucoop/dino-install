@@ -71,8 +71,8 @@ mkdir -p "$TARGET_DIR"
 TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
 cd "$TARGET_DIR"
 
-NHOST_APPS_REPO="${SETUP_NHOST_APPS_REPO:-git@github.com:gnucoop/nhost_apps.git}"
-NHOST_APPS_BRANCH="${SETUP_NHOST_APPS_BRANCH:-prod-1.21.0-permissions-m2}"
+NHOST_APPS_REPO="${SETUP_NHOST_APPS_REPO:-https://github.com/gnucoop/dino-db-config}"
+NHOST_APPS_BRANCH="${SETUP_NHOST_APPS_BRANCH:-main}"
 SUBDOMAINS=(dino auth hasura storage minio minio-console)
 
 # Host ports are read from .env.template so docker-compose.yml, nginx.conf and the
