@@ -223,3 +223,88 @@ Before writing anything, `setup.sh`:
 
 `.env`, `nginx.conf`, `certs/` and a cloned `nhost_apps/` — all git-ignored.
 Re-running `setup.sh` backs up any existing `.env` to `.env.backup`.
+
+## Updating an existing deployment
+
+> **Which folder?** Everything above happens in *this* folder — the installer
+> source. Everything below happens in your **deployment folder**: the
+> `TARGET_DIR` you passed to `setup.sh` (e.g. `my-dino/`), the one that holds the
+> generated `.env`, `nginx.conf`, `certs/`, `nhost_apps/`, `data/` and
+> `minio/storage/`. Do **not** re-run `setup.sh` to update — it would regenerate
+> every secret and break the running stack (which is exactly why the
+> existing-deployment guard aborts).
+
+```bash
+cd my-dino                      # your deployment folder, NOT the installer
+
+# 0. Back up first
+docker compose down
+cp -a ../my-dino ../my-dino.backup-$(date +%F)
+
+# 1. Pull DB updates (Hasura metadata + migrations)
+git -C nhost_apps pull
+
+# 2. Bump the image tags you want in .env
+#    DINOAPP_VERSION=...  (and HASURA_VERSION, HASURA_AUTH_VERSION,
+#    HASURA_STORAGE_VERSION, POSTGRES_VERSION, MINIO_VERSION, NGINX_VERSION)
+
+# 3. Fetch the new images and restart
+docker compose pull
+docker compose up -d
+```
+
+### 0. Back up your deployment folder
+
+All state lives inside the folder — Postgres in `./data`, MinIO objects in
+`./minio/storage`, and your unrecoverable secrets in `.env`. Copying the whole
+folder (with the stack stopped, so Postgres is consistent) is a complete backup
+and the only rollback you get.
+
+### 1. Pull `nhost_apps` for database updates
+
+New Hasura migrations and metadata arrive through the `nhost_apps/` clone:
+
+```bash
+git -C nhost_apps pull
+```
+
+The Hasura image is the `cli-migrations` variant, so it applies any new
+migrations and reloads metadata automatically on startup — there is nothing to
+run by hand. `postinstall.sql` is idempotent and will no-op on an existing
+install, so your seeded roles and admin user are left alone.
+
+> If the clone was made shallow (`--depth 1`) and `git pull` complains, use
+> `git -C nhost_apps fetch --depth 1 origin <branch> && git -C nhost_apps reset --hard FETCH_HEAD`.
+
+### 2. Bump the app versions in `.env`
+
+Edit the deployment's `.env` and set the new tag(s). `DINOAPP_VERSION` is the
+usual one; the same applies to any other component you're moving:
+
+| Variable | Component |
+|---|---|
+| `DINOAPP_VERSION` | Dino SPA (`devgnucoop/dinoapp`) |
+| `HASURA_VERSION` | Hasura GraphQL engine |
+| `HASURA_AUTH_VERSION` | nhost Auth |
+| `HASURA_STORAGE_VERSION` | nhost Storage |
+| `POSTGRES_VERSION` | Postgres / pgvector |
+| `MINIO_VERSION` / `MC_VERSION` | MinIO + client |
+| `NGINX_VERSION` | edge nginx |
+
+Change tags only — leave the generated secrets, domains and ports untouched.
+Bumping `POSTGRES_VERSION` across a major release is a data migration, not a
+restart: dump first.
+
+### 3. Restart the stack
+
+```bash
+docker compose down
+docker compose pull            # required if a tag is 'latest' or already cached
+docker compose up -d
+docker compose logs -f graphql # watch the migrations apply
+```
+
+`docker compose pull` matters: with a floating tag like `latest`, `up -d` reuses
+the image already on disk and your "update" silently does nothing. Never pass
+`-v` to `down` — the stack uses bind mounts, but the habit is what destroys data
+elsewhere.
