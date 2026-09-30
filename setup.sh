@@ -4,9 +4,11 @@
 # auto-generating all cryptographic secrets. Run this, then `docker compose up -d`.
 #
 # Usage:
-#   ./setup.sh [TARGET_DIR]
+#   ./setup.sh [--mcp] [--maui] [TARGET_DIR]
 #     TARGET_DIR   where to write the generated deployment (default: this folder).
 #                  e.g.  ./setup.sh ../my-dino   materializes a ready-to-run stack there.
+#     --mcp        also deploy the dino-mcp data-analysis connector for Claude.
+#     --maui       also deploy maui (the pandino AI service).
 #
 # Interactive by default. For unattended / cloud (Elestio, AWS, ...) runs, set:
 #   SETUP_NONINTERACTIVE=1 SETUP_BASE_DOMAIN=... SETUP_ADMIN_EMAIL=... \
@@ -23,13 +25,19 @@ Dino installer — render a ready-to-run deployment (.env, nginx.conf, TLS certs
 from a single base domain, auto-generating all cryptographic secrets.
 
 Usage:
-  ./setup.sh [TARGET_DIR]
+  ./setup.sh [--mcp] [--maui] [TARGET_DIR]
   ./setup.sh -h | --help
 
 Arguments:
   TARGET_DIR   Folder to write the generated deployment into (default: this
                folder). Created if it does not exist. Example:
                  ./setup.sh ../my-dino
+
+Optional components (default install: neither):
+  --mcp        Add the read-only MCP server that lets Claude analyse the
+               collected data (mcp.<BASE_DOMAIN>, host port 9003).
+  --maui       Add maui, the pandino AI service (maui.<BASE_DOMAIN>, host
+               port 5000). Prompts for its admin login and API keys.
 
 Environment overrides (for unattended / cloud installs):
   SETUP_NONINTERACTIVE=1   Skip all prompts and use defaults / overrides below.
@@ -39,6 +47,11 @@ Environment overrides (for unattended / cloud installs):
   SETUP_TLS_MODE           selfsigned | letsencrypt | provided.
   SETUP_UPSTREAM_HOST      Docker host gateway nginx uses to reach services.
   SETUP_AUTH_SMTP_*        Optional SMTP settings (HOST/PORT/USER/PASS/SENDER).
+  SETUP_MCP=1              Same as --mcp.
+  SETUP_MAUI=1             Same as --maui. Its inputs: SETUP_MAUI_ADMIN_USERNAME,
+                           SETUP_MAUI_ADMIN_PASSWORD (blank = auto-generated),
+                           SETUP_STRIPE_SK_KEY, SETUP_DEEPINFRA_API_KEY,
+                           SETUP_MISTRAL_API_KEY.
 
 Safety guards:
   SETUP_SKIP_PORT_CHECK=1  Skip the check that all Dino host ports are free.
@@ -53,9 +66,13 @@ EOF
 
 # ---------- argument parsing ----------
 TARGET_ARG=""
+WITH_MCP="${SETUP_MCP:-0}"
+WITH_MAUI="${SETUP_MAUI:-0}"
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
+    --mcp)  WITH_MCP=1 ;;
+    --maui) WITH_MAUI=1 ;;
     --) shift; break ;;
     -*) echo "Unknown option: $1" >&2; echo "Try './setup.sh --help'." >&2; exit 2 ;;
     *)  [ -z "$TARGET_ARG" ] || { echo "Unexpected extra argument: $1" >&2; exit 2; }
@@ -75,9 +92,9 @@ NHOST_APPS_REPO="${SETUP_NHOST_APPS_REPO:-https://github.com/gnucoop/dino-db-con
 NHOST_APPS_BRANCH="${SETUP_NHOST_APPS_BRANCH:-main}"
 SUBDOMAINS=(dino auth hasura storage minio minio-console)
 
-# Host ports are read from .env.template so docker-compose.yml, nginx.conf and the
-# port check below all share one source of truth (nothing is hardcoded twice).
-_envval() { grep -E "^$1=" "$SCRIPT_DIR/.env.template" | head -1 | cut -d= -f2- | tr -d '"'; }
+# Host ports are read from the .env templates so docker-compose*.yml, nginx.conf
+# and the port check below all share one source of truth (nothing is hardcoded twice).
+_envval() { grep -E "^$1=" "$SCRIPT_DIR/${2:-.env.template}" | head -1 | cut -d= -f2- | tr -d '"'; }
 P_HTTP="$(_envval HTTP_PORT)"
 P_HTTPS="$(_envval HTTPS_PORT)"
 P_PG="$(_envval PG_PORT)"
@@ -88,6 +105,20 @@ P_STORAGE="$(_envval YOUR_STORAGE_PORT)"
 P_MINIO="$(_envval MINIO_API_PORT)"
 P_CONSOLE="$(_envval MINIO_CONSOLE_PORT)"
 DINO_PORTS=("$P_HTTP" "$P_HTTPS" "$P_PG" "$P_DINOAPP" "$P_HASURA" "$P_AUTH" "$P_STORAGE" "$P_MINIO" "$P_CONSOLE")
+
+# Optional components: each one adds a compose overlay, an .env block, an nginx
+# server (between '# @<name>-begin/-end' markers), a subdomain and a host port.
+COMPONENTS=()
+P_MCP=""; P_MAUI=""
+if [ "$WITH_MCP" = "1" ]; then
+  COMPONENTS+=(mcp); SUBDOMAINS+=(mcp)
+  P_MCP="$(_envval MCP_HOST_PORT .env.mcp.template)"; DINO_PORTS+=("$P_MCP")
+fi
+if [ "$WITH_MAUI" = "1" ]; then
+  COMPONENTS+=(maui); SUBDOMAINS+=(maui)
+  P_MAUI="$(_envval MAUI_PORT .env.maui.template)"; DINO_PORTS+=("$P_MAUI")
+fi
+has_component() { local c; for c in ${COMPONENTS[@]+"${COMPONENTS[@]}"}; do [ "$c" = "$1" ] && return 0; done; return 1; }
 
 # ---------- pretty output ----------
 c_bold=$'\033[1m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_red=$'\033[31m'; c_rst=$'\033[0m'
@@ -167,6 +198,18 @@ if command -v docker >/dev/null 2>&1; then
   fi
 fi
 
+# maui stores its admin password as a bcrypt hash: use the local htpasswd, or
+# the one in the httpd image (Docker is already required).
+if [ "$WITH_MAUI" = "1" ]; then
+  if command -v htpasswd >/dev/null 2>&1; then
+    HTPASSWD=(htpasswd); ok "htpasswd" "local (bcrypt for maui)"
+  elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    HTPASSWD=(docker run --rm httpd:2-alpine htpasswd); ok "htpasswd" "via httpd:2-alpine image (bcrypt for maui)"
+  else
+    miss "htpasswd" "needed by --maui — install apache2-utils / httpd-tools, or start Docker"
+  fi
+fi
+
 if [ "$MISSING" -gt 0 ]; then
   die "$MISSING requirement(s) missing — install them and re-run ./setup.sh"
 fi
@@ -232,6 +275,15 @@ prompt AUTH_SMTP_USER   "SMTP user" ""
 prompt AUTH_SMTP_PASS   "SMTP password" "" 1
 prompt AUTH_SMTP_SENDER "SMTP sender address" "no-reply@${BASE_DOMAIN}"
 
+if [ "$WITH_MAUI" = "1" ]; then
+  info "maui settings (API keys may be left blank)."
+  prompt MAUI_ADMIN_USERNAME "maui admin username" "admin"
+  prompt MAUI_ADMIN_PASSWORD "maui admin password (blank = auto-generate)" "" 1
+  prompt STRIPE_SK_KEY       "Stripe secret key" "" 1
+  prompt DEEPINFRA_API_KEY   "DeepInfra API key" "" 1
+  prompt MISTRAL_API_KEY     "Mistral API key" "" 1
+fi
+
 case "$TLS_MODE" in selfsigned|letsencrypt|provided) ;; *) die "Invalid TLS mode: $TLS_MODE";; esac
 
 # ---------- 3. generate crypto ----------
@@ -242,6 +294,20 @@ PG_PASSWORD="$(openssl rand -hex 16)"
 S3_ACCESS_KEY="$(openssl rand -hex 10)"
 S3_SECRET_KEY="$(openssl rand -base64 30 | tr -d '/+=')"
 AUTH_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+MCP_ENCRYPTION_KEY=""; MCP_DB_PASSWORD=""
+if [ "$WITH_MCP" = "1" ]; then
+  MCP_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+  MCP_DB_PASSWORD="$(openssl rand -hex 16)"
+fi
+MAUI_ENCRYPTION_KEY=""; MAUI_ADMIN_PASSWORD_HASH=""
+if [ "$WITH_MAUI" = "1" ]; then
+  MAUI_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+  [ -n "$MAUI_ADMIN_PASSWORD" ] || MAUI_ADMIN_PASSWORD="$(openssl rand -hex 16)"
+  # htpasswd emits the $2y$ prefix; $2b$ is the same algorithm and what most
+  # bcrypt libraries write, so normalise to it.
+  MAUI_ADMIN_PASSWORD_HASH="$("${HTPASSWD[@]}" -nbBC 12 "" "$MAUI_ADMIN_PASSWORD" | tr -d ':\r\n' | sed 's/^\$2y\$/$2b$/')"
+  case "$MAUI_ADMIN_PASSWORD_HASH" in '$2b$'*) ;; *) die "Could not generate the maui admin password hash.";; esac
+fi
 
 # ---------- 4. render .env ----------
 render() {  # render <template> <output>  (literal token substitution, safe for any chars)
@@ -256,6 +322,14 @@ render() {  # render <template> <output>  (literal token substitution, safe for 
   content="${content//__S3_ACCESS_KEY__/$S3_ACCESS_KEY}"
   content="${content//__S3_SECRET_KEY__/$S3_SECRET_KEY}"
   content="${content//__AUTH_ENCRYPTION_KEY__/$AUTH_ENCRYPTION_KEY}"
+  content="${content//__MCP_ENCRYPTION_KEY__/$MCP_ENCRYPTION_KEY}"
+  content="${content//__MCP_DB_PASSWORD__/$MCP_DB_PASSWORD}"
+  content="${content//__MAUI_ENCRYPTION_KEY__/$MAUI_ENCRYPTION_KEY}"
+  content="${content//__MAUI_ADMIN_USERNAME__/${MAUI_ADMIN_USERNAME:-}}"
+  content="${content//__MAUI_ADMIN_PASSWORD_HASH__/$MAUI_ADMIN_PASSWORD_HASH}"
+  content="${content//__STRIPE_SK_KEY__/${STRIPE_SK_KEY:-}}"
+  content="${content//__DEEPINFRA_API_KEY__/${DEEPINFRA_API_KEY:-}}"
+  content="${content//__MISTRAL_API_KEY__/${MISTRAL_API_KEY:-}}"
   content="${content//__AUTH_SMTP_HOST__/$AUTH_SMTP_HOST}"
   content="${content//__AUTH_SMTP_PORT__/$AUTH_SMTP_PORT}"
   content="${content//__AUTH_SMTP_USER__/$AUTH_SMTP_USER}"
@@ -269,20 +343,46 @@ render() {  # render <template> <output>  (literal token substitution, safe for 
   content="${content//__YOUR_STORAGE_PORT__/$P_STORAGE}"
   content="${content//__MINIO_API_PORT__/$P_MINIO}"
   content="${content//__MINIO_CONSOLE_PORT__/$P_CONSOLE}"
+  content="${content//__MCP_HOST_PORT__/$P_MCP}"
+  content="${content//__MAUI_PORT__/$P_MAUI}"
   printf '%s\n' "$content" > "$2"
 }
 
 info "Writing generated files to: $TARGET_DIR"
 if [ -f .env ]; then info "Backing up existing .env -> .env.backup"; cp .env .env.backup; fi
 render "$SCRIPT_DIR/.env.template" .env
-info "Wrote .env"
+# Each optional component appends its own block, and COMPOSE_FILE makes a plain
+# `docker compose up -d` pick up the matching overlay files.
+COMPOSE_FILES="docker-compose.yml"
+for c in ${COMPONENTS[@]+"${COMPONENTS[@]}"}; do
+  render "$SCRIPT_DIR/.env.$c.template" .env.part
+  { echo; cat .env.part; } >> .env; rm -f .env.part
+  COMPOSE_FILES="$COMPOSE_FILES:docker-compose.$c.yml"
+done
+{
+  echo
+  echo "# --- COMPOSE (written by setup.sh) ---"
+  echo "# Files docker compose loads; optional components add their overlay here."
+  echo "COMPOSE_PATH_SEPARATOR=:"
+  echo "COMPOSE_FILE=$COMPOSE_FILES"
+} >> .env
+info "Wrote .env (components: ${COMPONENTS[*]:-none})"
 
 # ---------- 5. render nginx.conf + copy compose ----------
 render "$SCRIPT_DIR/nginx.conf.template" nginx.conf
+# Drop the server/upstream blocks of every component that is not enabled.
+for c in mcp maui; do
+  has_component "$c" || sed -i.bak "/# @$c-begin/,/# @$c-end/d" nginx.conf
+done
+rm -f nginx.conf.bak
 info "Wrote nginx.conf (upstream host: $UPSTREAM_HOST)"
 if [ "$TARGET_DIR" != "$SCRIPT_DIR" ]; then
   cp "$SCRIPT_DIR/docker-compose.yml" ./docker-compose.yml
   info "Copied docker-compose.yml"
+  for c in ${COMPONENTS[@]+"${COMPONENTS[@]}"}; do
+    cp "$SCRIPT_DIR/docker-compose.$c.yml" "./docker-compose.$c.yml"
+    info "Copied docker-compose.$c.yml"
+  done
 fi
 
 # ---------- 6. TLS certificates ----------
@@ -361,6 +461,7 @@ copy_bundled() {  # copy_bundled <name> <warn-msg>
 copy_bundled init.sql        "the database will not be seeded on first boot."
 copy_bundled postinstall.sql "initial data (roles / admin user) will not be created."
 mkdir -p data minio/storage
+if has_component maui; then mkdir -p cache exports logs; fi
 
 # ---------- 8. /etc/hosts helper (local) ----------
 if [ "$TLS_MODE" = "selfsigned" ]; then
@@ -395,6 +496,31 @@ cat <<EOF
     Auth     https://auth.${BASE_DOMAIN}/v1
     Storage  https://storage.${BASE_DOMAIN}
     MinIO    https://minio-console.${BASE_DOMAIN}
+EOF
+if has_component mcp;  then echo "    MCP      https://mcp.${BASE_DOMAIN}/mcp"; fi
+if has_component maui; then echo "    maui     https://maui.${BASE_DOMAIN}"; fi
+echo
+echo "  Optional components: ${COMPONENTS[*]:-none}"
+if has_component mcp; then
+  cat <<EOF
+
+  To let Claude analyse this deployment's data, mint a personal access token for
+  a Dino user and add the connector:
+    ${COMPOSE} exec mcp dino-mcp token create --email ${ADMIN_EMAIL} --expires 90d
+    claude mcp add --transport http dino https://mcp.${BASE_DOMAIN}/mcp \\
+      --header "Authorization: Bearer dino_pat_..."
+  The token grants exactly what that Dino user sees in the app, nothing more.
+EOF
+fi
+if has_component maui; then
+  cat <<EOF
+
+  maui admin login:
+    user     ${MAUI_ADMIN_USERNAME}  /  ${MAUI_ADMIN_PASSWORD}
+  Fill in the model / provider settings in .env (MAUI block) before starting it.
+EOF
+fi
+cat <<EOF
 
   Next:  cd ${TARGET_DIR} && ${COMPOSE} up -d
 

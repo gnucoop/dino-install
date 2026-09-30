@@ -1,0 +1,53 @@
+services:
+  # maui (pandino): AI data-chat / completion service. Enabled by
+  # `./setup.sh --maui`; reached through nginx at maui.<BASE_DOMAIN>. It calls
+  # hasura/auth/storage by their public names, which extra_hosts routes back to
+  # this host's nginx.
+  maui:
+    image: devgnucoop/pandino:${MAUI_VERSION}
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${MAUI_PORT}:5000"
+    volumes:
+      - ./cache:/app/cache
+      - ./exports:/app/exports
+      - ./logs/:/app/logs/
+    extra_hosts:
+      - "hasura.${BASE_DOMAIN}:host-gateway"
+      - "auth.${BASE_DOMAIN}:host-gateway"
+      - "storage.${BASE_DOMAIN}:host-gateway"
+    environment:
+      - ENCRYPTION_KEY=${MAUI_ENCRYPTION_KEY}
+      - STRIPE_SK_KEY=${STRIPE_SK_KEY}
+      - DEEPINFRA_API_KEY=${DEEPINFRA_API_KEY}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - PGUSER=${PG_USER}
+      - PGPWD=${PG_PASSWORD}
+      - PGHOST=${PG_ADDRESS}
+      - PGDB=${DINO_DB_NAME}
+      - DATACHAT_MODEL=${DATACHAT_MODEL}
+      - DATACHAT_PROVIDER=${DATACHAT_PROVIDER}
+      - PROMPT_MODEL=${PROMPT_MODEL}
+      - PROMPT_PROVIDER=${PROMPT_PROVIDER}
+      - COMPLETION_MODEL=${COMPLETION_MODEL}
+      - COMPLETION_MODEL_PROVIDER=${COMPLETION_MODEL_PROVIDER}
+      - COMPLETION_EMBEDDING_MODEL=${COMPLETION_EMBEDDING_MODEL}
+      - COMPLETION_EMBEDDING_MODEL_PROVIDER=${COMPLETION_EMBEDDING_MODEL_PROVIDER}
+      - PGVECTORDB=${PGVECTORDB}
+      - DATACHAT_TOKEN_COST=${DATACHAT_TOKEN_COST}
+      - COMPLETION_TOKEN_COST=${COMPLETION_TOKEN_COST}
+      - PROMPT_TOKEN_COST=${PROMPT_TOKEN_COST}
+      - AUDIO_FORM_TOKEN_COST=${AUDIO_FORM_TOKEN_COST}
+      - VISION_PROVIDER=${VISION_PROVIDER}
+      - VISION_MODEL=${VISION_MODEL}
+      - AUDIO_PROVIDER=${AUDIO_PROVIDER}
+      - AUDIO_MODEL=${AUDIO_MODEL}
+      - WHISPER_MODEL=${WHISPER_MODEL}
+      - COMPLETION_MODEL_AGENT_CHAT=${COMPLETION_MODEL_AGENT_CHAT}
+      - MAUI_SCHEMA=${MAUI_SCHEMA}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}

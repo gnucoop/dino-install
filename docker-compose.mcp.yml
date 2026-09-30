@@ -1,0 +1,41 @@
+services:
+  # Read-only MCP server: exposes this deployment's collected data to Claude,
+  # scoped by each caller's own Dino permissions. Migrates itself on boot with
+  # the bootstrap DSN (creating the MCP_DB_USER role, the mcp schema and the
+  # missing form_data indexes), then serves every request as that role.
+  mcp:
+    image: devgnucoop/dino-mcp:${MCP_VERSION}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      graphql:
+        condition: service_healthy   # public.* migrations applied
+    restart: always
+    ports:
+      - "${MCP_HOST_PORT}:${MCP_PORT}"
+    environment:
+      - MCP_PORT=${MCP_PORT}
+      - MCP_PUBLIC_URL=https://${MCP_PUBLIC_URL}
+      - MCP_DATABASE_URL=postgres://${MCP_DB_USER}:${MCP_DB_PASSWORD}@${PG_ADDRESS}:${PG_PORT}/${DINO_DB_NAME}
+      - MCP_BOOTSTRAP_DATABASE_URL=postgres://${PG_USER}:${PG_PASSWORD}@${PG_ADDRESS}:${PG_PORT}/${DINO_DB_NAME}
+      - MCP_DB_USER=${MCP_DB_USER}
+      - MCP_DB_PASSWORD=${MCP_DB_PASSWORD}
+      - MCP_DB_USER_REPLACE=${MCP_DB_USER_REPLACE}
+      - MCP_ENCRYPTION_KEY=${MCP_ENCRYPTION_KEY}
+      - AUTH_INTERNAL_URL=http://${AUTH_URL}:4000/v1
+      - INSTANCE_NAME=${INSTANCE_NAME}
+      - MCP_ADMIN_ROLES=${MCP_ADMIN_ROLES}
+      - MCP_ACTIVE_METRICS=${MCP_ACTIVE_METRICS}
+      - MCP_MAX_ROWS=${MCP_MAX_ROWS}
+      - MCP_MAX_RESPONSE_BYTES=${MCP_MAX_RESPONSE_BYTES}
+      - MCP_STATEMENT_TIMEOUT_MS=${MCP_STATEMENT_TIMEOUT_MS}
+      - MCP_CREATE_INDEXES=${MCP_CREATE_INDEXES}
+      - MCP_REDACT_FIELDS=${MCP_REDACT_FIELDS}
+      - MCP_LOG_LEVEL=${MCP_LOG_LEVEL}
+      - MCP_TRUST_PROXY=${MCP_TRUST_PROXY}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${MCP_PORT}/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s

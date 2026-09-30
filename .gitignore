@@ -9,6 +9,10 @@ certs/
 nhost_apps/
 data/
 minio/
+# maui (--maui) runtime folders
+cache/
+exports/
+logs/
 
 # NOTE: init.sql and postinstall.sql ARE committed — they ship with the installer
 # (DB seed + first-boot data). docker-compose.yml is a committed source too.

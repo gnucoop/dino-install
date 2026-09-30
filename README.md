@@ -13,7 +13,7 @@ git clone git@github.com:gnucoop/dino-install.git
 cd dino-install
 
 # 2. Generate a deployment into a folder of your choice, and answer the prompts
-./setup.sh my-dino
+./setup.sh my-dino            # add --mcp and/or --maui for the optional components
 
 # 3. Start the stack
 cd my-dino
@@ -37,9 +37,15 @@ served from the `devgnucoop/dinoapp` image), **PostgreSQL** (pgvector),
 (creates the default MinIO bucket) and `postinstall` (seeds initial data once the
 schema exists — see below).
 
+Two **optional components** are added only when you ask for them (see
+[Optional components](#optional-components---mcp---maui)):
+**mcp** (`--mcp`, a read-only MCP server that lets Claude analyse the collected
+data) and **maui** (`--maui`, the pandino AI service). They are drawn dashed below.
+
 ```mermaid
 flowchart TB
     U(["👤 Browser"])
+    C(["🤖 Claude"])
 
     subgraph PROXY["Edge"]
         N["🔒 nginx<br>TLS + reverse proxy<br>:80 / :443"]
@@ -51,6 +57,8 @@ flowchart TB
         A["Auth<br>nhost/auth<br>:9001 · /v1"]
         S["Storage<br>nhost/storage<br>:9002"]
         M["MinIO · S3<br>:9006 API / :32765 console"]
+        MC["MCP · data analysis<br>devgnucoop/dino-mcp<br>:9003 · --mcp"]
+        MA["maui · AI service<br>devgnucoop/pandino<br>:5000 · --maui"]
     end
 
     subgraph DATA["Data"]
@@ -66,11 +74,14 @@ flowchart TB
     IS[["init.sql · DB seed"]]
 
     U -->|"HTTPS · *.BASE_DOMAIN"| N
+    C -->|"MCP over HTTPS"| N
     N -->|"dino."| D
     N -->|"hasura."| G
     N -->|"auth."| A
     N -->|"storage."| S
     N -->|"minio. / minio-console."| M
+    N -.->|"mcp."| MC
+    N -.->|"maui."| MA
 
     G --> P
     A --> P
@@ -78,6 +89,11 @@ flowchart TB
     S --> P
     S -.-> G
     S -->|"S3"| M
+    MC -.->|"read-only role"| P
+    MC -.->|"GraphQL"| G
+    MC -.->|"auth API"| A
+    MA -.-> P
+    MA -.->|"hasura. / auth. / storage."| N
 
     NA -. "mount" .-> G
     IS -. "mount" .-> P
@@ -90,7 +106,10 @@ terminates TLS and reverse-proxies each subdomain to the right service. Hasura,
 Auth and Storage all talk to Postgres; Storage keeps objects in MinIO; Hasura
 applies the `nhost_apps` migrations/metadata; Postgres is seeded from `init.sql`.
 On first boot `createbucket` creates the default bucket and `postinstall` seeds
-the roles + admin login, then both exit.
+the roles + admin login, then both exit. When enabled, the `mcp` service reads
+Postgres through its own least-privilege role and never writes; `maui` uses
+Postgres directly and reaches Hasura/Auth/Storage through nginx by their public
+names.
 
 ### First-boot seed (`postinstall.sql`)
 
@@ -107,8 +126,9 @@ seeds initial data **once** (idempotent — it only runs when the tables are emp
 So after `docker compose up -d` you can log into the SPA at `https://dino.<domain>`
 with the admin email + password shown at the end of `setup.sh`.
 
-> Pandino (AI backend), the chatbot proxy and the welcome site are intentionally
-> excluded from this slim kit.
+> The chatbot proxy and the welcome site are intentionally excluded from this
+> slim kit. Pandino (the AI backend) is available as the optional `maui`
+> component (`./setup.sh --maui`).
 
 ## Requirements
 
@@ -124,6 +144,7 @@ are missing:
 | **openssl** | generates secrets and self-signed certificates |
 | **git** | clones `nhost_apps` |
 | **bash** (3.2+) / **sed** | run and render the installer |
+| **htpasswd** (`--maui` only) | bcrypt-hashes the maui admin password. If it is not installed, `setup.sh` runs it from the `httpd:2-alpine` image instead. |
 
 ### Software (TLS-mode dependent)
 
@@ -136,14 +157,16 @@ are missing:
 
 - **git access to the `nhost_apps` repo** (Hasura metadata / migrations / emails).
   `setup.sh` clones it into a real `nhost_apps/` folder — the installer never
-  depends on any file outside itself. Default is SSH
-  (`git@github.com:gnucoop/nhost_apps.git`, branch `prod-1.21.0-permissions-m2`);
-  override with `SETUP_NHOST_APPS_REPO` / `SETUP_NHOST_APPS_BRANCH`.
+  depends on any file outside itself. Default is
+  `https://github.com/gnucoop/dino-db-config`, branch `main`; override with
+  `SETUP_NHOST_APPS_REPO` / `SETUP_NHOST_APPS_BRANCH`.
 - **Free host ports:** `80`, `443` (nginx), `5432` (postgres), `8090` (SPA),
-  `9000`/`9001`/`9002` (hasura/auth/storage), `9006`/`32765` (MinIO API/console).
+  `9000`/`9001`/`9002` (hasura/auth/storage), `9006`/`32765` (MinIO API/console),
+  plus `9003` with `--mcp` and `5000` with `--maui`.
   `setup.sh` verifies all of these are free and **aborts** (listing the offenders)
   if any are in use — bypass with `SETUP_SKIP_PORT_CHECK=1`.
-- **Name resolution** for the six subdomains (see the table below):
+- **Name resolution** for the six subdomains, plus `mcp.` / `maui.` when those
+  components are enabled (see the table below):
   - local install → `setup.sh` prints the `/etc/hosts` lines and can append them;
   - public install → real DNS A/AAAA records pointing at the host.
 
@@ -162,13 +185,15 @@ this folder and are copied into each deployment automatically.
 ## Usage
 
 ```bash
-./setup.sh                 # generate in place
-./setup.sh ../my-dino      # generate a ready-to-run deployment in ../my-dino
-docker compose up -d       # (run from the folder setup.sh wrote to)
+./setup.sh                        # generate in place
+./setup.sh ../my-dino             # generate a ready-to-run deployment in ../my-dino
+./setup.sh --mcp --maui ../my-dino  # ...with both optional components
+docker compose up -d              # (run from the folder setup.sh wrote to)
 ```
 
-`setup.sh [TARGET_DIR]` writes `.env`, `nginx.conf`, TLS `certs/`, a copy of
-`docker-compose.yml`, copies `init.sql` + `postinstall.sql`, and clones
+`setup.sh [--mcp] [--maui] [TARGET_DIR]` writes `.env`, `nginx.conf`, TLS
+`certs/`, a copy of `docker-compose.yml` (plus the overlay file of each enabled
+component), copies `init.sql` + `postinstall.sql`, and clones
 `nhost_apps/` into `TARGET_DIR` (default: this folder). This lets you keep the
 installer as read-only source and
 materialize each deployment into its own directory.
@@ -185,6 +210,8 @@ TLS mode. All service hostnames are derived from the base domain:
 | Storage      | `storage.<BASE_DOMAIN>`        |
 | MinIO API    | `minio.<BASE_DOMAIN>`          |
 | MinIO console| `minio-console.<BASE_DOMAIN>` |
+| MCP (Claude) | `mcp.<BASE_DOMAIN>` — `--mcp` only   |
+| maui         | `maui.<BASE_DOMAIN>` — `--maui` only |
 
 ### TLS modes
 
@@ -208,6 +235,99 @@ SETUP_TLS_MODE=letsencrypt \
 ./setup.sh
 ```
 
+Use `SETUP_MCP=1` / `SETUP_MAUI=1` in place of the `--mcp` / `--maui` flags. The
+maui inputs are `SETUP_MAUI_ADMIN_USERNAME`, `SETUP_MAUI_ADMIN_PASSWORD` (blank =
+auto-generated), `SETUP_STRIPE_SK_KEY`, `SETUP_DEEPINFRA_API_KEY` and
+`SETUP_MISTRAL_API_KEY`.
+
+## Optional components (`--mcp`, `--maui`)
+
+Without flags, `setup.sh` installs the default stack only. Each flag adds one
+component, and they can be combined:
+
+| Flag | Service | Files it brings in |
+|---|---|---|
+| `--mcp`  | `mcp` (dino-mcp, Claude connector) | `docker-compose.mcp.yml`, `.env.mcp.template`, the `@mcp` blocks of `nginx.conf.template` |
+| `--maui` | `maui` (pandino AI service) | `docker-compose.maui.yml`, `.env.maui.template`, the `@maui` blocks of `nginx.conf.template` |
+
+For each enabled component, `setup.sh` appends its block to `.env`, keeps its
+`# @<name>-begin … # @<name>-end` server and upstream blocks in `nginx.conf`
+(disabled ones are removed), adds its subdomain to the certificate and
+`/etc/hosts` lists, and checks its host port. The generated `.env` ends with a
+`COMPOSE_FILE=` line listing the compose files to load, so a plain
+`docker compose up -d` starts exactly the chosen set of services.
+
+### maui
+
+`--maui` prompts for the maui admin username and password, and stores the
+password as a bcrypt `ADMIN_PASSWORD_HASH`. It also prompts for the Stripe,
+DeepInfra and Mistral API keys (blank allowed) and generates `MAUI_ENCRYPTION_KEY`.
+The model and provider settings (`DATACHAT_*`, `PROMPT_*`, `COMPLETION_*`,
+`VISION_*`, `AUDIO_*`, `WHISPER_MODEL`, `MAUI_SCHEMA`, the token costs,
+`OLLAMA_BASE_URL`) are left empty in the `# --- MAUI ---` block of `.env`: fill
+them in before the first `docker compose up -d`. maui keeps its runtime data in
+`./cache`, `./exports` and `./logs` in the deployment folder.
+
+## Connecting Claude (the `mcp` service, `--mcp`)
+
+The `mcp` service exposes this deployment's collected data to Claude — claude.ai,
+Claude Desktop or Claude Code — **read-only**, and scoped by the caller's own
+Dino permissions rather than by Hasura's. Every request runs *as a Dino user*:
+there is no MCP account and no service account, and the answer Claude gets is
+exactly the slice of the dataset that user sees in the app.
+
+Mint a personal access token for a Dino user, then add the connector:
+
+```bash
+docker compose exec mcp dino-mcp token create --email you@example.org --expires 90d
+claude mcp add --transport http dino https://mcp.<BASE_DOMAIN>/mcp \
+  --header "Authorization: Bearer dino_pat_..."
+```
+
+The token is shown once. `dino-mcp token list` and `dino-mcp token revoke <id>`
+manage the rest. Granting or revoking access is done in Dino itself: a user's
+groups decide what they can read, and disabling or deleting the user blocks MCP
+on the next call.
+
+> **A shared token is a shared identity.** A single token configured for a whole
+> Claude organisation collapses every member onto one Dino principal, which
+> silently defeats group and metric scoping. That is acceptable only for a
+> single-analyst deployment or a test. Per-member sign-in (OAuth), which
+> claude.ai custom connectors require, is the next milestone of `dino-mcp`.
+
+### Two settings that must match the SPA build
+
+| Variable | Must match |
+|---|---|
+| `MCP_ADMIN_ROLES` | `environment.usersConfig.adminRoles` |
+| `MCP_ACTIVE_METRICS` | `environment.optionalModulesConfig` (the active metric modules) |
+
+If they disagree, MCP answers disagree with what the app shows: a metric module
+that the SPA does not use contributes no scoping clause at all.
+
+### Where it is deliberately stricter than the app
+
+Dino's application-level permission checks fail *open* in two places, because in
+the SPA they are UI conveniences with Hasura's row-level permissions still
+standing behind them. In MCP there is nothing behind them, so both are inverted:
+
+- a user with **no groups** reads **nothing** (the app would allow everything);
+- a role that says nothing about a subject grants **nothing** for that role (the
+  app would allow it, and skip the remaining roles).
+
+Kept as the app has it, including where it widens access: a record with **no
+metric reference** (no project, no location…) stays visible to everyone, an
+**empty** metric array means "only records with no metric", and a user in several
+groups gets the flat union of them.
+
+### Turning it off
+
+Install without `--mcp`. On an existing deployment, run `docker compose stop mcp`,
+remove `:docker-compose.mcp.yml` from the `COMPOSE_FILE` line in `.env`, and drop
+the `mcp.` server block and `upstream mcp` from `nginx.conf`. Set
+`MCP_CREATE_INDEXES=false` beforehand if you do not want the service to add the
+missing `form_data` indexes to your schema.
+
 ## Safety guards
 
 Before writing anything, `setup.sh`:
@@ -222,6 +342,7 @@ Before writing anything, `setup.sh`:
 ## What gets generated
 
 `.env`, `nginx.conf`, `certs/` and a cloned `nhost_apps/` — all git-ignored.
+With `--maui`, also the empty `cache/`, `exports/` and `logs/` folders.
 Re-running `setup.sh` backs up any existing `.env` to `.env.backup`.
 
 ## Updating an existing deployment
@@ -246,12 +367,45 @@ git -C nhost_apps pull
 
 # 2. Bump the image tags you want in .env
 #    DINOAPP_VERSION=...  (and HASURA_VERSION, HASURA_AUTH_VERSION,
-#    HASURA_STORAGE_VERSION, POSTGRES_VERSION, MINIO_VERSION, NGINX_VERSION)
+#    HASURA_STORAGE_VERSION, POSTGRES_VERSION, MINIO_VERSION, NGINX_VERSION,
+#    MCP_VERSION, MAUI_VERSION)
 
 # 3. Fetch the new images and restart
 docker compose pull
 docker compose up -d
 ```
+
+### Adding an optional component to an existing deployment
+
+Both components are purely additive — no existing service changes — so an
+existing deployment picks one up without touching its data volume. For `<c>` =
+`mcp` or `maui`:
+
+1. copy `docker-compose.<c>.yml` from this folder into the deployment folder;
+2. append `.env.<c>.template` to the deployment's `.env`, replacing
+   `__BASE_DOMAIN__` with your domain and filling in the other `__…__` tokens:
+   - mcp: `openssl rand -hex 32` for `MCP_ENCRYPTION_KEY`,
+     `openssl rand -hex 16` for `MCP_DB_PASSWORD`;
+   - maui: `openssl rand -hex 32` for `MAUI_ENCRYPTION_KEY`; the admin username;
+     `htpasswd -nbBC 12 "" 'password' | tr -d ':\n'` for `ADMIN_PASSWORD_HASH`
+     (keep the single quotes); the API keys; then the model settings;
+3. add `:docker-compose.<c>.yml` to the `COMPOSE_FILE=` line in `.env`. A
+   deployment generated before this change has no such line, so add both
+   `COMPOSE_PATH_SEPARATOR=:` and `COMPOSE_FILE=docker-compose.yml:docker-compose.<c>.yml`.
+   Also add `BASE_DOMAIN=<your domain>` if `.env` lacks it (maui needs it);
+4. copy the `# @<c>-begin … # @<c>-end` server block **and** upstream block from
+   `nginx.conf.template` into your `nginx.conf`, substituting your domain,
+   upstream host and port (`9003` for mcp, `5000` for maui). For mcp,
+   `proxy_buffering off` is the line that breaks streaming silently if it is
+   missed;
+5. issue a certificate covering `<c>.<BASE_DOMAIN>` (certbot: add
+   `-d <c>.<BASE_DOMAIN>`), and for a local install add it to `/etc/hosts`;
+6. for maui, run `mkdir -p cache exports logs`;
+7. `docker compose up -d <c> && docker compose restart nginx`.
+
+The mcp container creates its own read-only role and schema on boot; it never
+migrates Dino's own tables, and only adds indexes to `form_data` when
+`MCP_CREATE_INDEXES=true`.
 
 ### 0. Back up your deployment folder
 
@@ -290,6 +444,8 @@ usual one; the same applies to any other component you're moving:
 | `POSTGRES_VERSION` | Postgres / pgvector |
 | `MINIO_VERSION` / `MC_VERSION` | MinIO + client |
 | `NGINX_VERSION` | edge nginx |
+| `MCP_VERSION` | dino-mcp (`--mcp`) |
+| `MAUI_VERSION` | maui / pandino (`--maui`) |
 
 Change tags only — leave the generated secrets, domains and ports untouched.
 Bumping `POSTGRES_VERSION` across a major release is a data migration, not a
