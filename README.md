@@ -66,7 +66,7 @@ flowchart TB
     end
 
     subgraph BOOT["First-boot one-shots"]
-        CB["createbucket<br>minio/mc"]
+        CB["createbucket<br>pgsty/mc"]
         PI["postinstall<br>psql · postinstall.sql"]
     end
 

@@ -140,7 +140,7 @@ services:
     restart: always
 
   minio:
-    image: minio/minio:${MINIO_VERSION}
+    image: pgsty/minio:${MINIO_VERSION}
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
@@ -154,7 +154,7 @@ services:
 
   # Ephemeral helper: waits for MinIO, then creates the default bucket.
   createbucket:
-    image: minio/mc:${MC_VERSION}
+    image: pgsty/mc:${MC_VERSION}
     depends_on:
       - minio
     environment:
